@@ -223,4 +223,28 @@ export default function piTelegram(pi: ExtensionAPI) {
 			};
 		},
 	});
+
+	pi.registerTool({
+		name: "tg_topics",
+		label: "Telegram Topics",
+		description:
+			"List the group's forum topics — 'id — name' lines. Use the id as thread= for tg_send to post in a topic.",
+		promptSnippet: "List forum topics",
+		parameters: Type.Object({}),
+		async execute() {
+			const map = process.env.TG_TOPICS ?? "";
+			const lines = map
+				.split(",")
+				.map((p) => p.trim())
+				.filter(Boolean)
+				.map((p) => {
+					const [id, ...rest] = p.split(":");
+					return `${id} — ${rest.join(":")}`;
+				});
+			const text = lines.length
+				? "topics:\n" + lines.join("\n") + "\n(general/main chat = no thread)"
+				: "(no topic map — TG_TOPICS env unset)";
+			return { content: [{ type: "text" as const, text }] };
+		},
+	});
 }

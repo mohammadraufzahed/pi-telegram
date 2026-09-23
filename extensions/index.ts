@@ -7,6 +7,8 @@
  *   tg_react    — react with an emoji to a message
  *   tg_pin      — pin a message
  *   tg_edit     — edit one of your own messages
+ *   tg_delete   — delete a message
+ *   tg_unpin    — unpin message(s)
  *   tg_history  — search the host's message journal (via team mailbox)
  *
  * Env (injected by the host):
@@ -258,6 +260,51 @@ export default function piTelegram(pi: ExtensionAPI) {
 				? "topics:\n" + lines.join("\n") + "\n(general/main chat = no thread)"
 				: "(no topics learned yet)";
 			return { content: [{ type: "text" as const, text }] };
+		},
+	});
+
+	pi.registerTool({
+		name: "tg_delete",
+		label: "Telegram Delete",
+		description:
+			"Delete a message — your own always; others' only if your bot is an admin with delete rights.",
+		parameters: Type.Object({
+			message_id: Type.Number(),
+		}),
+		async execute(_id, params) {
+			const r = await tg("deleteMessage", {
+				chat_id: process.env.TG_CHAT,
+				message_id: params.message_id,
+			});
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: r.ok ? "deleted" : `failed: ${r.error}`,
+					},
+				],
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "tg_unpin",
+		label: "Telegram Unpin",
+		description: "Unpin a message (or all pinned in the topic).",
+		parameters: Type.Object({
+			message_id: Type.Optional(Type.Number({ description: "omit = unpin all" })),
+		}),
+		async execute(_id, params) {
+			const method = params.message_id ? "unpinChatMessage" : "unpinAllChatMessages";
+			const r = await tg(method, {
+				chat_id: process.env.TG_CHAT,
+				...(params.message_id ? { message_id: params.message_id } : {}),
+			});
+			return {
+				content: [
+					{ type: "text" as const, text: r.ok ? "unpinned" : `failed: ${r.error}` },
+				],
+			};
 		},
 	});
 }

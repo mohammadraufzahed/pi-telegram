@@ -55,6 +55,46 @@ const chatBody = (thread?: number) => {
 	return b;
 };
 
+
+/** Send a request to the host via the team mailbox; poll for the reply. */
+async function mailbox(kind: string, text: string): Promise<string | null> {
+	const dir =
+		process.env.PI_TEAM_DIR ??
+		join(homedir(), ".local/state/telegram-agent/team");
+	const reqDir = join(dir, "requests");
+	const repDir = join(dir, "replies");
+	mkdirSync(reqDir, { recursive: true });
+	mkdirSync(repDir, { recursive: true });
+	const id = randomUUID();
+	writeFileSync(
+		join(reqDir, `${id}.json`),
+		JSON.stringify({
+			id,
+			from: process.env.PI_TEAM_FROM ?? "?",
+			to: "host",
+			kind,
+			text,
+			chat: process.env.PI_TEAM_CHAT,
+			thread: process.env.PI_TEAM_THREAD,
+			at: Date.now(),
+		}),
+	);
+	const file = join(repDir, `${id}.json`);
+	const deadline = Date.now() + 30_000;
+	while (Date.now() < deadline) {
+		if (existsSync(file)) {
+			try {
+				const r = JSON.parse(readFileSync(file, "utf-8"));
+				return String(r.text ?? "");
+			} catch {
+				/* partial write — retry */
+			}
+		}
+		await new Promise((r) => setTimeout(r, 500));
+	}
+	return null;
+}
+
 export default function piTelegram(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "tg_send",
@@ -170,55 +210,22 @@ export default function piTelegram(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "tg_history",
 		label: "Telegram History",
-		description:
-			"Search the chat journal — who said what, when. Answers 'کی اینو گفت' / 'آخرین بار کی این باگ اومد' without guessing.",
-		promptSnippet: "Search chat history",
+		description: "Search the chat journal — who said what, when. Answers 'کی اینو گفت' / 'آخرین بار کی این باگ اومد' without guessing.",
 		parameters: Type.Object({
 			query: Type.String({ description: "substring to search" }),
 			limit: Type.Optional(Type.Number()),
 		}),
 		async execute(_id, params) {
-			const dir =
-				process.env.PI_TEAM_DIR ??
-				join(homedir(), ".local/state/telegram-agent/team");
-			const reqDir = join(dir, "requests");
-			const repDir = join(dir, "replies");
-			mkdirSync(reqDir, { recursive: true });
-			mkdirSync(repDir, { recursive: true });
-			const id = randomUUID();
-			writeFileSync(
-				join(reqDir, `${id}.json`),
-				JSON.stringify({
-					id,
-					from: process.env.PI_TEAM_FROM ?? "?",
-					to: "host",
-					kind: "history",
-					text: `${params.query}|||${params.limit ?? 10}`,
-					chat: process.env.PI_TEAM_CHAT,
-					thread: process.env.PI_TEAM_THREAD,
-					at: Date.now(),
-				}),
+			const rep = await mailbox(
+				"history",
+				`${params.query}|||${params.limit ?? 10}`,
 			);
-			const file = join(repDir, `${id}.json`);
-			const deadline = Date.now() + 30_000;
-			while (Date.now() < deadline) {
-				if (existsSync(file)) {
-					try {
-						const r = JSON.parse(readFileSync(file, "utf-8"));
-						return {
-							content: [
-								{ type: "text" as const, text: String(r.text ?? "") },
-							],
-						};
-					} catch {
-						/* retry */
-					}
-				}
-				await new Promise((r) => setTimeout(r, 600));
-			}
 			return {
 				content: [
-					{ type: "text" as const, text: "(history lookup timed out)" },
+					{
+						type: "text" as const,
+						text: rep ?? "(history lookup timed out)",
+					},
 				],
 			};
 		},
@@ -232,6 +239,12 @@ export default function piTelegram(pi: ExtensionAPI) {
 		promptSnippet: "List forum topics",
 		parameters: Type.Object({}),
 		async execute() {
+			// Live topics from the host's learned topics table via the
+			// mailbox (kind=topics) — env map is only a fallback.
+			const rep = await mailbox("topics", "");
+			if (rep) {
+				return { content: [{ type: "text" as const, text: rep }] };
+			}
 			const map = process.env.TG_TOPICS ?? "";
 			const lines = map
 				.split(",")
@@ -243,7 +256,7 @@ export default function piTelegram(pi: ExtensionAPI) {
 				});
 			const text = lines.length
 				? "topics:\n" + lines.join("\n") + "\n(general/main chat = no thread)"
-				: "(no topic map — TG_TOPICS env unset)";
+				: "(no topics learned yet)";
 			return { content: [{ type: "text" as const, text }] };
 		},
 	});

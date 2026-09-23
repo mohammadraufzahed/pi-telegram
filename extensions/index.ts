@@ -48,10 +48,10 @@ async function tg(method: string, body: Record<string, unknown>) {
 	return { ok: d.ok, error: d.description, result: d.result };
 }
 
-const chatBody = () => {
+const chatBody = (thread?: number) => {
 	const b: Record<string, unknown> = { chat_id: process.env.TG_CHAT };
-	if (process.env.TG_THREAD)
-		b.message_thread_id = Number(process.env.TG_THREAD);
+	const t = thread ?? (process.env.TG_THREAD ? Number(process.env.TG_THREAD) : undefined);
+	if (t) b.message_thread_id = t;
 	return b;
 };
 
@@ -65,6 +65,7 @@ export default function piTelegram(pi: ExtensionAPI) {
 		parameters: Type.Object({
 			text: Type.String(),
 			reply_to: Type.Optional(Type.Number({ description: "message_id" })),
+			thread: Type.Optional(Type.Number({ description: "topic/message_thread_id — default: current" })),
 		}),
 		async execute(_id, params) {
 			const chunks: string[] = [];
@@ -73,7 +74,7 @@ export default function piTelegram(pi: ExtensionAPI) {
 			const ids: number[] = [];
 			for (const [i, c] of chunks.entries()) {
 				const r = await tg("sendMessage", {
-					...chatBody(),
+					...chatBody(params.thread),
 					text: c,
 					reply_parameters:
 						params.reply_to && i === 0

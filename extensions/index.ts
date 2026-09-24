@@ -58,9 +58,16 @@ async function parseTelegramResponse(response: Response): Promise<TelegramRespon
 	}
 }
 
+function validateTelegramEnv(requireChat = true): string | null {
+	if (!process.env.TG_BOT_TOKEN) return "TG_BOT_TOKEN not set";
+	if (requireChat && !process.env.TG_CHAT) return "TG_CHAT not set";
+	return null;
+}
+
 async function tg(method: string, body: Record<string, unknown>): Promise<TelegramResponse> {
+	const envError = validateTelegramEnv();
+	if (envError) return { ok: false, error: envError };
 	const token = process.env.TG_BOT_TOKEN;
-	if (!token) return { ok: false, error: "TG_BOT_TOKEN not set" };
 	const r = await fetch(`${API}/bot${token}/${method}`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
@@ -70,8 +77,9 @@ async function tg(method: string, body: Record<string, unknown>): Promise<Telegr
 }
 
 async function tgGet(method: string, params: Record<string, unknown>): Promise<TelegramResponse> {
+	const envError = validateTelegramEnv(params.chat_id !== undefined);
+	if (envError) return { ok: false, error: envError };
 	const token = process.env.TG_BOT_TOKEN;
-	if (!token) return { ok: false, error: "TG_BOT_TOKEN not set" };
 	const url = new URL(`${API}/bot${token}/${method}`);
 	for (const [key, value] of Object.entries(params)) {
 		if (value !== undefined) url.searchParams.set(key, String(value));
@@ -184,6 +192,7 @@ export default function piTelegram(pi: ExtensionAPI) {
 						content: [
 							{ type: "text" as const, text: `send failed: ${r.error}` },
 						],
+						details: undefined,
 					};
 				ids.push((r.result as { message_id: number }).message_id);
 			}
@@ -211,6 +220,7 @@ export default function piTelegram(pi: ExtensionAPI) {
 					content: [
 						{ type: "text" as const, text: "failed: reaction must be exactly one emoji grapheme" },
 					],
+					details: undefined,
 				};
 			}
 
@@ -222,6 +232,7 @@ export default function piTelegram(pi: ExtensionAPI) {
 			if (r.ok) {
 				return {
 					content: [{ type: "text" as const, text: "reacted" }],
+					details: undefined,
 				};
 			}
 
@@ -241,6 +252,7 @@ export default function piTelegram(pi: ExtensionAPI) {
 						text: `failed: ${r.error}${hint}`,
 					},
 				],
+				details: undefined,
 			};
 		},
 	});
@@ -263,6 +275,7 @@ export default function piTelegram(pi: ExtensionAPI) {
 				content: [
 					{ type: "text" as const, text: r.ok ? "pinned" : `failed: ${r.error}` },
 				],
+				details: undefined,
 			};
 		},
 	});
@@ -285,6 +298,7 @@ export default function piTelegram(pi: ExtensionAPI) {
 				content: [
 					{ type: "text" as const, text: r.ok ? "edited" : `failed: ${r.error}` },
 				],
+				details: undefined,
 			};
 		},
 	});
@@ -309,6 +323,7 @@ export default function piTelegram(pi: ExtensionAPI) {
 						text: rep ?? "(history lookup timed out)",
 					},
 				],
+				details: undefined,
 			};
 		},
 	});
@@ -325,7 +340,7 @@ export default function piTelegram(pi: ExtensionAPI) {
 			// mailbox (kind=topics) — env map is only a fallback.
 			const rep = await mailbox("topics", "");
 			if (rep) {
-				return { content: [{ type: "text" as const, text: rep }] };
+				return { content: [{ type: "text" as const, text: rep }], details: undefined };
 			}
 			const map = process.env.TG_TOPICS ?? "";
 			const lines = map
@@ -339,7 +354,7 @@ export default function piTelegram(pi: ExtensionAPI) {
 			const text = lines.length
 				? "topics:\n" + lines.join("\n") + "\n(general/main chat = no thread)"
 				: "(no topics learned yet)";
-			return { content: [{ type: "text" as const, text }] };
+			return { content: [{ type: "text" as const, text }], details: undefined };
 		},
 	});
 
@@ -363,6 +378,7 @@ export default function piTelegram(pi: ExtensionAPI) {
 						text: r.ok ? "deleted" : `failed: ${r.error}`,
 					},
 				],
+				details: undefined,
 			};
 		},
 	});
@@ -384,6 +400,7 @@ export default function piTelegram(pi: ExtensionAPI) {
 				content: [
 					{ type: "text" as const, text: r.ok ? "unpinned" : `failed: ${r.error}` },
 				],
+				details: undefined,
 			};
 		},
 	});

@@ -34,7 +34,13 @@ const API = "https://api.telegram.org";
 
 const MAX_LEN = 4000;
 
-async function tg(method: string, body: Record<string, unknown>) {
+type TelegramResponse = {
+	ok: boolean;
+	error?: string;
+	result?: unknown;
+};
+
+async function tg(method: string, body: Record<string, unknown>): Promise<TelegramResponse> {
 	const token = process.env.TG_BOT_TOKEN;
 	if (!token) return { ok: false, error: "TG_BOT_TOKEN not set" };
 	const r = await fetch(`${API}/bot${token}/${method}`, {
@@ -48,6 +54,33 @@ async function tg(method: string, body: Record<string, unknown>) {
 		result?: unknown;
 	};
 	return { ok: d.ok, error: d.description, result: d.result };
+}
+
+async function tgGet(method: string, params: Record<string, unknown>): Promise<TelegramResponse> {
+	const token = process.env.TG_BOT_TOKEN;
+	if (!token) return { ok: false, error: "TG_BOT_TOKEN not set" };
+	const url = new URL(`${API}/bot${token}/${method}`);
+	for (const [key, value] of Object.entries(params)) {
+		if (value !== undefined) url.searchParams.set(key, String(value));
+	}
+	const r = await fetch(url);
+	const d = (await r.json()) as {
+		ok: boolean;
+		description?: string;
+		result?: unknown;
+	};
+	return { ok: d.ok, error: d.description, result: d.result };
+}
+
+function configuredReactionHint(chat: unknown): string | null {
+	const available = (chat as { available_reactions?: Array<{ type?: string; emoji?: string }> })
+		?.available_reactions;
+	if (!Array.isArray(available) || available.length === 0) return null;
+	const emojis = available
+		.filter((reaction) => reaction.type === "emoji" && reaction.emoji)
+		.map((reaction) => reaction.emoji);
+	if (emojis.length === 0) return "chat only allows custom reactions that bots cannot send";
+	return `allowed reactions in this chat: ${emojis.join(" ")}`;
 }
 
 const chatBody = (thread?: number) => {
@@ -154,11 +187,26 @@ export default function piTelegram(pi: ExtensionAPI) {
 				message_id: params.message_id,
 				reaction: [{ type: "emoji", emoji: params.emoji }],
 			});
+			if (r.ok) {
+				return {
+					content: [{ type: "text" as const, text: "reacted" }],
+				};
+			}
+
+			let hint = "";
+			if (r.error?.includes("REACTION_INVALID")) {
+				const chat = await tgGet("getChat", { chat_id: process.env.TG_CHAT });
+				const reactionHint = chat.ok ? configuredReactionHint(chat.result) : null;
+				hint = reactionHint
+					? ` (${reactionHint})`
+					: " (Telegram rejected this emoji for the chat; try a default enabled reaction such as 👀 or 👍)";
+			}
+
 			return {
 				content: [
 					{
 						type: "text" as const,
-						text: r.ok ? "reacted" : `failed: ${r.error}`,
+						text: `failed: ${r.error}${hint}`,
 					},
 				],
 			};

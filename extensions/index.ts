@@ -121,6 +121,9 @@ function emojiCount(value: string): number {
 	return Array.from(value.trim()).length;
 }
 
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
 
 /** Send a request to the host via the team mailbox; poll for the reply. */
 async function mailbox(kind: string, text: string): Promise<string | null> {
@@ -129,22 +132,28 @@ async function mailbox(kind: string, text: string): Promise<string | null> {
 		join(homedir(), ".local/state/telegram-agent/team");
 	const reqDir = join(dir, "requests");
 	const repDir = join(dir, "replies");
-	mkdirSync(reqDir, { recursive: true });
-	mkdirSync(repDir, { recursive: true });
 	const id = randomUUID();
-	writeFileSync(
-		join(reqDir, `${id}.json`),
-		JSON.stringify({
-			id,
-			from: process.env.PI_TEAM_FROM ?? "?",
-			to: "host",
-			kind,
-			text,
-			chat: process.env.PI_TEAM_CHAT,
-			thread: process.env.PI_TEAM_THREAD,
-			at: Date.now(),
-		}),
-	);
+
+	try {
+		mkdirSync(reqDir, { recursive: true });
+		mkdirSync(repDir, { recursive: true });
+		writeFileSync(
+			join(reqDir, `${id}.json`),
+			JSON.stringify({
+				id,
+				from: process.env.PI_TEAM_FROM ?? "?",
+				to: "host",
+				kind,
+				text,
+				chat: process.env.PI_TEAM_CHAT,
+				thread: process.env.PI_TEAM_THREAD,
+				at: Date.now(),
+			}),
+		);
+	} catch (error) {
+		return `(mailbox request failed: ${errorMessage(error)})`;
+	}
+
 	const file = join(repDir, `${id}.json`);
 	const deadline = Date.now() + 30_000;
 	while (Date.now() < deadline) {
@@ -152,8 +161,12 @@ async function mailbox(kind: string, text: string): Promise<string | null> {
 			try {
 				const r = JSON.parse(readFileSync(file, "utf-8"));
 				return String(r.text ?? "");
-			} catch {
-				/* partial write — retry */
+			} catch (error) {
+				if (error instanceof SyntaxError) {
+					/* partial write — retry */
+				} else {
+					return `(mailbox reply read failed: ${errorMessage(error)})`;
+				}
 			}
 		}
 		await new Promise((r) => setTimeout(r, 500));

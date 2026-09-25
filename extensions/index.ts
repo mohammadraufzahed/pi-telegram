@@ -40,6 +40,24 @@ type TelegramResponse = {
 	result?: unknown;
 };
 
+type TelegramPayload = {
+	ok: boolean;
+	description?: string;
+	result?: unknown;
+};
+
+async function parseTelegramResponse(response: Response): Promise<TelegramResponse> {
+	try {
+		const payload = (await response.json()) as TelegramPayload;
+		return { ok: payload.ok, error: payload.description, result: payload.result };
+	} catch (error) {
+		return {
+			ok: false,
+			error: `Telegram returned ${response.status} ${response.statusText}: ${error instanceof Error ? error.message : String(error)}`,
+		};
+	}
+}
+
 async function tg(method: string, body: Record<string, unknown>): Promise<TelegramResponse> {
 	const token = process.env.TG_BOT_TOKEN;
 	if (!token) return { ok: false, error: "TG_BOT_TOKEN not set" };
@@ -48,12 +66,7 @@ async function tg(method: string, body: Record<string, unknown>): Promise<Telegr
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
 	});
-	const d = (await r.json()) as {
-		ok: boolean;
-		description?: string;
-		result?: unknown;
-	};
-	return { ok: d.ok, error: d.description, result: d.result };
+	return parseTelegramResponse(r);
 }
 
 async function tgGet(method: string, params: Record<string, unknown>): Promise<TelegramResponse> {
@@ -64,12 +77,7 @@ async function tgGet(method: string, params: Record<string, unknown>): Promise<T
 		if (value !== undefined) url.searchParams.set(key, String(value));
 	}
 	const r = await fetch(url);
-	const d = (await r.json()) as {
-		ok: boolean;
-		description?: string;
-		result?: unknown;
-	};
-	return { ok: d.ok, error: d.description, result: d.result };
+	return parseTelegramResponse(r);
 }
 
 function configuredReactionHint(chat: unknown): string | null {
@@ -83,12 +91,27 @@ function configuredReactionHint(chat: unknown): string | null {
 	return `allowed reactions in this chat: ${emojis.join(" ")}`;
 }
 
+function defaultThread(): number | undefined {
+	const raw = process.env.TG_THREAD ?? process.env.PI_TEAM_THREAD;
+	if (!raw) return undefined;
+	const thread = Number(raw);
+	return Number.isFinite(thread) && thread > 0 ? thread : undefined;
+}
+
 const chatBody = (thread?: number) => {
 	const b: Record<string, unknown> = { chat_id: process.env.TG_CHAT };
-	const t = thread ?? (process.env.TG_THREAD ? Number(process.env.TG_THREAD) : undefined);
+	const t = thread ?? defaultThread();
 	if (t) b.message_thread_id = t;
 	return b;
 };
+
+function emojiCount(value: string): number {
+	if (typeof Intl.Segmenter === "function") {
+		const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+		return Array.from(segmenter.segment(value.trim())).length;
+	}
+	return Array.from(value.trim()).length;
+}
 
 
 /** Send a request to the host via the team mailbox; poll for the reply. */
@@ -182,10 +205,19 @@ export default function piTelegram(pi: ExtensionAPI) {
 			emoji: Type.String({ description: "single emoji, e.g. 👀 ✅ 🔥" }),
 		}),
 		async execute(_id, params) {
+			const emoji = params.emoji.trim();
+			if (emojiCount(emoji) !== 1) {
+				return {
+					content: [
+						{ type: "text" as const, text: "failed: reaction must be exactly one emoji grapheme" },
+					],
+				};
+			}
+
 			const r = await tg("setMessageReaction", {
 				chat_id: process.env.TG_CHAT,
 				message_id: params.message_id,
-				reaction: [{ type: "emoji", emoji: params.emoji }],
+				reaction: [{ type: "emoji", emoji }],
 			});
 			if (r.ok) {
 				return {

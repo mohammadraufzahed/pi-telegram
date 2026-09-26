@@ -33,6 +33,7 @@ import { Type } from "typebox";
 const API = "https://api.telegram.org";
 
 const MAX_LEN = 4000;
+const TELEGRAM_TIMEOUT_MS = 10_000;
 
 type TelegramResponse = {
 	ok: boolean;
@@ -64,16 +65,32 @@ function validateTelegramEnv(requireChat = true): string | null {
 	return null;
 }
 
+async function telegramFetch(url: string | URL, init?: RequestInit): Promise<TelegramResponse> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), TELEGRAM_TIMEOUT_MS);
+	try {
+		const response = await fetch(url, { ...init, signal: controller.signal });
+		return parseTelegramResponse(response);
+	} catch (error) {
+		if (error instanceof Error && error.name === "AbortError") {
+			return { ok: false, error: `Telegram request timed out after ${TELEGRAM_TIMEOUT_MS}ms` };
+		}
+		const message = error instanceof Error ? error.message : String(error);
+		return { ok: false, error: `Telegram request failed: ${message}` };
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
 async function tg(method: string, body: Record<string, unknown>): Promise<TelegramResponse> {
 	const envError = validateTelegramEnv();
 	if (envError) return { ok: false, error: envError };
 	const token = process.env.TG_BOT_TOKEN;
-	const r = await fetch(`${API}/bot${token}/${method}`, {
+	return telegramFetch(`${API}/bot${token}/${method}`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
 	});
-	return parseTelegramResponse(r);
 }
 
 async function tgGet(method: string, params: Record<string, unknown>): Promise<TelegramResponse> {
@@ -84,8 +101,7 @@ async function tgGet(method: string, params: Record<string, unknown>): Promise<T
 	for (const [key, value] of Object.entries(params)) {
 		if (value !== undefined) url.searchParams.set(key, String(value));
 	}
-	const r = await fetch(url);
-	return parseTelegramResponse(r);
+	return telegramFetch(url);
 }
 
 function configuredReactionHint(chat: unknown): string | null {

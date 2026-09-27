@@ -22,7 +22,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	existsSync,
 	mkdirSync,
+	readdirSync,
 	readFileSync,
+	statSync,
+	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -125,6 +128,32 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+function tryUnlink(file: string): void {
+	try {
+		unlinkSync(file);
+	} catch {
+		/* cleanup failure must never break the tool */
+	}
+}
+
+/** Delete mailbox files older than `maxAgeMs` — best-effort sweep. */
+function sweepStale(dir: string, maxAgeMs = 10 * 60_000): void {
+	try {
+		const cutoff = Date.now() - maxAgeMs;
+		for (const name of readdirSync(dir)) {
+			if (!name.endsWith(".json")) continue;
+			const file = join(dir, name);
+			try {
+				if (statSync(file).mtimeMs < cutoff) unlinkSync(file);
+			} catch {
+				/* ignore */
+			}
+		}
+	} catch {
+		/* ignore */
+	}
+}
+
 /** Send a request to the host via the team mailbox; poll for the reply. */
 async function mailbox(kind: string, text: string): Promise<string | null> {
 	const dir =
@@ -132,13 +161,16 @@ async function mailbox(kind: string, text: string): Promise<string | null> {
 		join(homedir(), ".local/state/telegram-agent/team");
 	const reqDir = join(dir, "requests");
 	const repDir = join(dir, "replies");
+	sweepStale(reqDir);
+	sweepStale(repDir);
 	const id = randomUUID();
+	const reqFile = join(reqDir, `${id}.json`);
 
 	try {
 		mkdirSync(reqDir, { recursive: true });
 		mkdirSync(repDir, { recursive: true });
 		writeFileSync(
-			join(reqDir, `${id}.json`),
+			reqFile,
 			JSON.stringify({
 				id,
 				from: process.env.PI_TEAM_FROM ?? "?",
@@ -155,11 +187,13 @@ async function mailbox(kind: string, text: string): Promise<string | null> {
 	}
 
 	const file = join(repDir, `${id}.json`);
-	const deadline = Date.now() + 30_000;
+	const timeoutMs = Number(process.env.PI_TEAM_MAILBOX_TIMEOUT_MS) || 30_000;
+	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		if (existsSync(file)) {
 			try {
 				const r = JSON.parse(readFileSync(file, "utf-8"));
+				tryUnlink(file);
 				return String(r.text ?? "");
 			} catch (error) {
 				if (error instanceof SyntaxError) {
@@ -171,6 +205,7 @@ async function mailbox(kind: string, text: string): Promise<string | null> {
 		}
 		await new Promise((r) => setTimeout(r, 500));
 	}
+	tryUnlink(reqFile);
 	return null;
 }
 

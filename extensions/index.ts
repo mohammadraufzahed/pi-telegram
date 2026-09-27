@@ -64,6 +64,13 @@ async function parseTelegramResponse(response: Response): Promise<TelegramRespon
 function validateTelegramEnv(requireChat = true): string | null {
 	if (!process.env.TG_BOT_TOKEN) return "TG_BOT_TOKEN not set";
 	if (requireChat && !process.env.TG_CHAT) return "TG_CHAT not set";
+	const rawThread = process.env.TG_THREAD ?? process.env.PI_TEAM_THREAD;
+	if (rawThread) {
+		const thread = Number(rawThread);
+		if (!Number.isInteger(thread) || thread <= 0) {
+			return `TG_THREAD is set but invalid: "${rawThread}" (expected a positive integer)`;
+		}
+	}
 	return null;
 }
 
